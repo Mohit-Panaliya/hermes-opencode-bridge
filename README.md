@@ -4,8 +4,10 @@ Bridge Hermes Agent to **opencode** and **kilocode** (a KiloCode fork/variant of
 opencode) so the model runs inside the opencode/kilo process while keeping
 Hermes' real tool surface reachable — in both directions.
 
-This repo documents the connector, ships the Python MCP server verbatim, and
-carries sanitized configuration examples.
+This repo documents the connector, ships the **Rust MCP transport** (a fast
+stdio front-end) plus the shared warm Python worker it talks to, keeps the
+original Python MCP server verbatim as reference/fallback, and carries
+sanitized configuration examples.
 
 ---
 
@@ -62,24 +64,54 @@ Hermes tools that overlap-free region needs; a bare CLI receives everything.
 A fallback pool (`fallback_providers`) rotates free models across both
 backends — see `config/config.yaml.acp-mcp`.
 
-### 2. Hermes side — the MCP server (`connector/hermes_tools_mcp_server.py`)
+### 2. Hermes side — the MCP transport (`rust/hermes-tools-mcp` + `worker/hermes_tools_worker.py`)
 
-A stdio MCP server (newline-delimited JSON-RPC 2.0) that exposes Hermes' tools
-to **any** MCP client. It:
+A **Rust stdio MCP server** (newline-delimited JSON-RPC 2.0) that exposes
+Hermes' tools to **any** MCP client, backed by a long-lived warm Python worker:
+
+```
+                  tools/list · tools/call
+  opencode / kilo ─────────────────────────▶ rust/hermes-tools-mcp  (stdio)
+                                              │  JSON-RPC over Unix socket
+                                              ▼
+                                    worker/hermes_tools_worker.py
+                                      (imports model_tools once)
+```
+
+The Rust binary is the client-facing process that opencode/kilocode spawns; it
+shares **one** warm Python worker (`agent.transports.hermes_tools_worker`)
+across all sessions so the ~1.5 s `model_tools` import and ~115 MB resident
+worker happen once, not per client process. Behavior is identical to the
+Python server:
 
 - builds the authoritative tool schemas from
   `model_tools.get_tool_definitions(quiet_mode=True)`,
 - registers the curated `EXPOSED_TOOLS` set,
 - dispatches each call through `model_tools.handle_function_call(...)`,
-- runs with `HERMES_QUIET=1` / `HERMES_REDACT_SECRETS=true` and logs only to
-  stderr so the stdio wire stays clean.
+- runs the worker with `HERMES_QUIET=1` / `HERMES_REDACT_SECRETS=true`; the
+  worker logs to `<socket>.log` (never stdout) so the stdio wire stays clean.
+
+Build:
 
 ```bash
-# from a hermes-agent checkout with the mcp package installed
+cd rust/hermes-tools-mcp          # or this repo's rust/
+cargo build --release
+cp target/release/hermes-tools-mcp "$HERMES_AGENT_DIR/venv/bin/"
+```
+
+The worker is invoked by the binary via `python -m agent.transports.hermes_tools_worker`
+from a hermes-agent checkout (socket `--socket`, idle exit `--idle-seconds`
+default 300, socket `chmod 0600`).
+
+### 3. Hermes side — the original Python MCP server (`connector/hermes_tools_mcp_server.py`)
+
+Kept verbatim as the reference implementation and fallback. Standalone use:
+
+```bash
 python -m agent.transports.hermes_tools_mcp_server
 ```
 
-### 3. Client side — MCP registration
+### 4. Client side — MCP registration
 
 Register the server as a local stdio MCP server in each client's global config:
 
@@ -95,9 +127,15 @@ Minimal entry (paths → `$HERMES_AGENT_DIR` placeholder; see
     "hermes-tools": {
       "type": "local",
       "command": [
+        "$HERMES_AGENT_DIR/venv/bin/hermes-tools-mcp",
+        "--socket",
+        "$HERMES_RUN_DIR/hermes-tools.sock",
+        "--worker-python",
         "$HERMES_AGENT_DIR/venv/bin/python",
-        "-m",
-        "agent.transports.hermes_tools_mcp_server"
+        "--cwd",
+        "$HERMES_AGENT_DIR",
+        "--idle-seconds",
+        "600"
       ],
       "cwd": "$HERMES_AGENT_DIR",
       "enabled": true
@@ -105,6 +143,9 @@ Minimal entry (paths → `$HERMES_AGENT_DIR` placeholder; see
   }
 }
 ```
+
+The Python-server variant (fallback) replaces the command with
+`["$HERMES_AGENT_DIR/venv/bin/python", "-m", "agent.transports.hermes_tools_mcp_server"]`.
 
 Verify with `opencode mcp list` / `kilo mcp list` → `hermes-tools ✓ connected`.
 
@@ -138,26 +179,35 @@ dead one.
 5. Run a turn. The opencode/kilo agent now has `hermes-tools_*` tools backed by
    Hermes' real implementations.
 
-### Verified smoke tests
+### Verified smoke tests (free models)
 
-- `opencode run "<prompt>"` → invokes `hermes-tools_web_search`, returns real
-  results.
-- `kilo run "<prompt>"` → same.
-- `hermes -z "<prompt>" --provider opencode-acp` → the Hermes agent drives
-  opencode over ACP and the opencode agent calls back into Hermes via MCP.
-- `hermes -z "<prompt>" --provider kilocode-acp` → same for kilocode.
+- `opencode run -m opencode/big-pickle "<prompt>"` → invokes
+  `hermes-tools_web_search`, returns real results.
+- `kilo run -m kilo/kilo-auto/free "<prompt>"` → same for kilocode.
+- `hermes -m opencode/mimo-v2.6-flash-free --provider opencode-acp -z "<prompt>"` →
+  the Hermes agent drives opencode over ACP and the opencode agent calls back
+  into Hermes via MCP.
+- `hermes -m kilo/kilo-auto/free --provider kilocode-acp -z "<prompt>"` → same
+  for kilocode.
+
+All four paths resolve through the same Rust `hermes-tools-mcp` binary and one
+shared warm worker.
 
 ## Notes and roadmap
 
 - The MCP wire is newline-delimited JSON-RPC 2.0 on stdio (UTF-8), matching the
   `mcp` 2.x server (`mcp.server.MCPServer`).
-- `connector/hermes_tools_mcp_server.py` originates from
+- The Rust front-end (`rust/`) spawns the worker if the socket is unreachable,
+  retries on a dropped connection, and handles `initialize`, `ping`,
+  `tools/list`, `tools/call`, and `method-not-found` (-32601) exactly like the
+  Python server.
+- `connector/hermes_tools_mcp_server.py` and
+  `worker/hermes_tools_worker.py` originate from
   [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)
-  (`agent/transports/hermes_tools_mcp_server.py`), Apache-2.0; mirrored here
-  verbatim for standalone reference.
-- **Roadmap:** a Rust MCP transport front-end over a shared warm Hermes tool
-  worker — cuts per-session cold start (~1.7 s Python import) and duplicated
-  ~85 MB resident memory per client process.
+  (Apache-2.0); the server is mirrored verbatim for standalone reference, the
+  worker ships as the shared backend for the Rust front-end.
+- **Roadmap:** publish the compiled Rust binary as a released asset; port the
+  worker itself to Rust for fully dependency-free operation.
 
 ## License
 

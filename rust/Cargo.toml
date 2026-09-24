@@ -1,0 +1,15 @@
+[package]
+name = "hermes-tools-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "Rust stdio MCP transport for the Hermes <-> opencode/kilocode tool bridge; forwards to the warm hermes_tools_worker over a Unix socket."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
