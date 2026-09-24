@@ -1,0 +1,38 @@
+# --- Hermes config.yaml excerpt: ACP layer (Hermes -> opencode / kilocode) ---
+#
+# The model runs INSIDE an opencode / kiloCode process spawned by Hermes as an
+# ACP backend. Hermes' tool schemas travel into the prompt as text
+# (agent/acp_openai_bridge.py) and tool calls are parsed back out of the reply.
+#
+# A fallback pool rotates free models across the two ACP backends. Values below
+# are examples from a working setup; model names change as providers ship new
+# free tiers.
+
+model:
+  default: opencode/mimo-v2.5-free
+  provider: opencode-acp
+  base_url: acp://opencode
+
+fallback_providers: &free_pool
+  # kilocode backend
+  - provider: kilocode-acp
+    model: kilo/nvidia/nemotron-3-ultra-550b-a55b:free
+  - provider: kilocode-acp
+    model: kilo/nvidia/nemotron-3.5-lightning:free
+  - provider: kilocode-acp
+    model: kilo/kilo-auto/free
+  - provider: kilocode-acp
+    model: kilo/openrouter/free
+
+  # opencode backend
+  - provider: opencode-acp
+    model: opencode/nemotron-3.5-lightning-free
+  - provider: opencode-acp
+    model: opencode/nemotron-3-ultra-free
+  - provider: opencode-acp
+    model: opencode/mimo-v2.5-free
+
+  # native provider examples (key referenced via env, never inline)
+  - provider: nvidia
+    model: moonshotai/kimi-k3
+    key_env: NVIDIA_API_KEY

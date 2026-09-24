@@ -1,0 +1,15 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "mcp": {
+    "hermes-tools": {
+      "type": "local",
+      "command": [
+        "$HERMES_AGENT_DIR/venv/bin/python",
+        "-m",
+        "agent.transports.hermes_tools_mcp_server"
+      ],
+      "cwd": "$HERMES_AGENT_DIR",
+      "enabled": true
+    }
+  }
+}
