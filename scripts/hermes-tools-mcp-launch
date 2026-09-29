@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# hermes-tools MCP bridge launcher.
+#
+# Primary: the Rust transport (hermes-tools-mcp), which serves the MCP stdio
+# wire and forwards to a shared warm Python worker over a Unix socket.
+# Fallback: the original Python MCP server (agent.transports.hermes_tools_mcp_server),
+# used when the Rust binary is missing/broken so opencode/kilocode still get tools.
+#
+# opencode/kilocode configs call THIS script as the "hermes-tools" local MCP
+# server command. Both clients' schemas only accept a single command array, so
+# rust-vs-python precedence lives here.
+set -u
+
+HERMES_AGENT_DIR="${HERMES_AGENT_DIR:-$HOME/.hermes/hermes-agent}"
+PYTHON_BIN="${PYTHON_BIN:-$HERMES_AGENT_DIR/venv/bin/python}"
+RUST_BIN="${RUST_BIN:-$HERMES_AGENT_DIR/venv/bin/hermes-tools-mcp}"
+RUN_DIR="${HERMES_RUN_DIR:-$HOME/.hermes/run}"
+WORKER_SOCK="${HERMES_TOOLS_SOCKET:-$RUN_DIR/hermes-tools.sock}"
+WORKER_MODULE="${HERMES_TOOLS_WORKER_MODULE:-agent.transports.hermes_tools_worker}"
+IDLE_SECONDS="${HERMES_TOOLS_IDLE_SECONDS:-600}"
+
+mkdir -p "$RUN_DIR"
+
+# Prefer Rust. --check verifies the worker python + module are reachable so a
+# broken install degrades to the Python server instead of a dead MCP session.
+if [ -x "$RUST_BIN" ] && "$RUST_BIN" --check \
+      --socket "$WORKER_SOCK" \
+      --worker-python "$PYTHON_BIN" \
+      --worker-module "$WORKER_MODULE" \
+      --cwd "$HERMES_AGENT_DIR" >/dev/null 2>&1; then
+  exec "$RUST_BIN" \
+    --socket "$WORKER_SOCK" \
+    --worker-python "$PYTHON_BIN" \
+    --worker-module "$WORKER_MODULE" \
+    --cwd "$HERMES_AGENT_DIR" \
+    --idle-seconds "$IDLE_SECONDS"
+fi
+
+# Fallback: Python stdio MCP server.
+exec "$PYTHON_BIN" -m agent.transports.hermes_tools_mcp_server

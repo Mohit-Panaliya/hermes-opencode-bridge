@@ -27,6 +27,35 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
+/// Check that the given Python interpreter and the worker module file exist and
+/// are importable-shaped. Used by `--check` (the bridge launcher's
+/// rust-vs-python decision). Deliberately non-importing: importing the worker
+/// pulls in `model_tools` (~1.5 s) per spawned session, which defeats the
+/// shared warm-worker design.
+fn probe_worker_python(python: &Path, cwd: &Path, module: &str) -> Result<(), String> {
+    if !python.is_file() {
+        return Err(format!("worker python not found: {}", python.display()));
+    }
+    let rel = format!("{}.py", module.replace('.', "/"));
+    if !cwd.join(&rel).is_file() {
+        return Err(format!("worker module not found: {}/{}", cwd.display(), rel));
+    }
+    let out = Command::new(python)
+        .arg("-c")
+        .arg("print('ok')")
+        .current_dir(cwd)
+        .output()
+        .map_err(|e| format!("spawn {python:?}: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "python {python:?} runnable check failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
+
 // Keep stdout writes under a mutex so logging (stderr) and protocol (stdout)
 // never race even if a helper thread emits something.
 const MCP_NAME: &str = "hermes-tools";
@@ -41,6 +70,7 @@ struct Config {
     idle_seconds: u64,
     verbose: bool,
     max_wait_ms: u64,
+    check: bool,
 }
 
 fn parse_args() -> Config {
@@ -51,6 +81,7 @@ fn parse_args() -> Config {
     let mut idle_seconds: u64 = 300;
     let mut verbose = false;
     let mut max_wait_ms: u64 = 10_000;
+    let mut check = false;
 
     let args: Vec<String> = env::args().skip(1).collect();
     let mut i = 0;
@@ -68,6 +99,7 @@ fn parse_args() -> Config {
             "--idle-seconds" => idle_seconds = v(&mut i).and_then(|s| s.parse().ok()).unwrap_or(300),
             "--max-wait-ms" => max_wait_ms = v(&mut i).and_then(|s| s.parse().ok()).unwrap_or(10_000),
             "--verbose" | "-v" => verbose = true,
+            "--check" => check = true,
             other => {
                 eprintln!("hermes-tools-mcp: ignoring unknown arg {other:?}");
             }
@@ -99,6 +131,7 @@ fn parse_args() -> Config {
         idle_seconds,
         verbose,
         max_wait_ms,
+        check,
     }
 }
 
@@ -381,6 +414,18 @@ fn parse_error(id: Value) -> Value {
 fn main() {
     let cfg = parse_args();
 
+    if cfg.check {
+        // Self-test used by the bridge launcher: verify the Python worker is
+        // actually importable before committing stdio to the Rust transport.
+        let rv = probe_worker_python(&cfg.worker_python, &cfg.cwd, &cfg.worker_module);
+        if rv.is_err() {
+            eprintln!("hermes-tools-mcp: self-check failed: {rv:?}");
+            std::process::exit(1);
+        }
+        println!("ok");
+        std::process::exit(0);
+    }
+
     match ensure_worker(&cfg) {
         Ok(_) => {}
         Err(e) => {
@@ -396,6 +441,7 @@ fn main() {
                     idle_seconds: cfg.idle_seconds,
                     verbose: cfg.verbose,
                     max_wait_ms: cfg.max_wait_ms,
+                    check: false,
                 };
                 thread::spawn(move || {
                     thread::sleep(Duration::from_millis(500));

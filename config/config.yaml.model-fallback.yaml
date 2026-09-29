@@ -1,0 +1,67 @@
+# Hermes model routing for the opencode/kiloCode bridge.
+#
+# Order of preference (all free models first, nvidia last):
+#   kilocode free -> opencode free -> nvidia (NVIDIA_API_KEY)
+#
+# ACP carries the LLM turn OUT (Hermes spawns opencode/kilo as an ACP backend);
+# MCP brings Hermes tools BACK IN.
+model:
+  default: kilo/nvidia/nemotron-3-ultra-550b-a55b:free
+  provider: kilocode-acp
+  base_url: acp://kilocode
+fallback_providers: &free_pool
+  # ── kilocode free (all free models, first) ──
+  - provider: kilocode-acp
+    model: kilo/nvidia/nemotron-3-ultra-550b-a55b:free
+  - provider: kilocode-acp
+    model: kilo/kilo-auto/free
+  - provider: kilocode-acp
+    model: kilo/nvidia/nemotron-3-super-120b-a12b:free
+  - provider: kilocode-acp
+    model: kilo/nvidia/nemotron-3.5-lightning:free
+  - provider: kilocode-acp
+    model: kilo/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
+  - provider: kilocode-acp
+    model: kilo/stepfun/step-3.7-flash:free
+  - provider: kilocode-acp
+    model: kilo/qwen/qwen3.8-27b:free
+  - provider: kilocode-acp
+    model: kilo/poolside/laguna-s-2.1:free
+  - provider: kilocode-acp
+    model: kilo/poolside/laguna-xs-2.1:free
+  - provider: kilocode-acp
+    model: kilo/liquid/lfm-2.5-2.6b:free
+  - provider: kilocode-acp
+    model: kilo/cohere/north-mini-code:free
+  - provider: kilocode-acp
+    model: kilo/inclusionai/ling-3.0-flash-sante:free
+  - provider: kilocode-acp
+    model: kilo/dots-studio/dots-3-note-preview:free
+  - provider: kilocode-acp
+    model: kilo/thinkingmachines/inkling-small:free
+  - provider: kilocode-acp
+    model: kilo/openrouter/free
+  # ── opencode free (all free models, second) ──
+  - provider: opencode-acp
+    model: opencode/nemotron-3-ultra-free
+  - provider: opencode-acp
+    model: opencode/nemotron-3.5-lightning-free
+  - provider: opencode-acp
+    model: opencode/mimo-v2.6-flash-free
+  - provider: opencode-acp
+    model: opencode/ling-3.0-flash-fin-free
+  - provider: opencode-acp
+    model: opencode/muse-spark-1.3-contributor-free
+  - provider: opencode-acp
+    model: opencode/space-bunny-free
+  - provider: opencode-acp
+    model: opencode/longcat-2.5-preview-free
+  - provider: opencode-acp
+    model: opencode/big-pickle
+  # ── nvidia (last resort, needs NVIDIA_API_KEY) ──
+  - provider: nvidia
+    model: moonshotai/kimi-k3
+    key_env: NVIDIA_API_KEY
+  - provider: nvidia
+    model: z-ai/glm-5.3
+    key_env: NVIDIA_API_KEY

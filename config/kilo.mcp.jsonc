@@ -4,15 +4,7 @@
     "hermes-tools": {
       "type": "local",
       "command": [
-        "$HERMES_AGENT_DIR/venv/bin/hermes-tools-mcp",
-        "--socket",
-        "$HERMES_RUN_DIR/hermes-tools.sock",
-        "--worker-python",
-        "$HERMES_AGENT_DIR/venv/bin/python",
-        "--cwd",
-        "$HERMES_AGENT_DIR",
-        "--idle-seconds",
-        "600"
+        "$HERMES_AGENT_DIR/venv/bin/hermes-tools-mcp-launch"
       ],
       "cwd": "$HERMES_AGENT_DIR",
       "enabled": true

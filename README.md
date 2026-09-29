@@ -127,15 +127,7 @@ Minimal entry (paths → `$HERMES_AGENT_DIR` placeholder; see
     "hermes-tools": {
       "type": "local",
       "command": [
-        "$HERMES_AGENT_DIR/venv/bin/hermes-tools-mcp",
-        "--socket",
-        "$HERMES_RUN_DIR/hermes-tools.sock",
-        "--worker-python",
-        "$HERMES_AGENT_DIR/venv/bin/python",
-        "--cwd",
-        "$HERMES_AGENT_DIR",
-        "--idle-seconds",
-        "600"
+        "$HERMES_AGENT_DIR/venv/bin/hermes-tools-mcp-launch"
       ],
       "cwd": "$HERMES_AGENT_DIR",
       "enabled": true
@@ -144,8 +136,19 @@ Minimal entry (paths → `$HERMES_AGENT_DIR` placeholder; see
 }
 ```
 
-The Python-server variant (fallback) replaces the command with
-`["$HERMES_AGENT_DIR/venv/bin/python", "-m", "agent.transports.hermes_tools_mcp_server"]`.
+`command` points at the **launcher** (`scripts/hermes-tools-mcp-launch`), which
+prefers the Rust transport and degrades to the Python server, because the MCP
+config schemas accept only a single `command` array:
+
+- if `hermes-tools-mcp` (Rust) exists and `--check` passes (worker python +
+  worker module reachable) → `exec` the Rust binary;
+- otherwise → `exec python -m agent.transports.hermes_tools_mcp_server`.
+
+A direct Rust wiring (without python fallback) replaces the command with
+`["$HERMES_AGENT_DIR/venv/bin/hermes-tools-mcp", "--socket",
+"$HERMES_RUN_DIR/hermes-tools.sock", "--worker-python",
+"$HERMES_AGENT_DIR/venv/bin/python", "--cwd", "$HERMES_AGENT_DIR",
+"--idle-seconds", "600"]`.
 
 Verify with `opencode mcp list` / `kilo mcp list` → `hermes-tools ✓ connected`.
 
@@ -173,7 +176,10 @@ dead one.
 
 1. Have a `hermes-agent` checkout with its venv and the `mcp` package
    (`pip install "mcp>=2"`).
-2. Set Hermes' model to an ACP backend (see `config.yaml.acp-mcp`).
+2. Set Hermes' model to an ACP backend (see `config.yaml.acp-mcp` and
+   `config/config.yaml.model-fallback.yaml`). Default routing is **kilocode free
+   → opencode free → nvidia** (all t2 free tiers across both clients first,
+   nvidia last; see the sanctioned example).
 3. Register `hermes-tools` in opencode and/or kilocode configs.
 4. Confirm registration: `opencode mcp list`, `kilo mcp list`.
 5. Run a turn. The opencode/kilo agent now has `hermes-tools_*` tools backed by
@@ -190,8 +196,9 @@ dead one.
 - `hermes -m kilo/kilo-auto/free --provider kilocode-acp -z "<prompt>"` → same
   for kilocode.
 
-All four paths resolve through the same Rust `hermes-tools-mcp` binary and one
-shared warm worker.
+All four paths resolve through the `hermes-tools-mcp-launch` wrapper, which
+prefers the Rust `hermes-tools-mcp` binary (one shared warm worker) and falls
+back to the Python MCP server if the Rust binary is broken/missing.
 
 ## Notes and roadmap
 
