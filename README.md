@@ -1,52 +1,123 @@
 # hermes-opencode-bridge
 
-Bridge Hermes Agent to **opencode** and **kilocode** (a KiloCode fork/variant of
-opencode) so the model runs inside the opencode/kilo process while keeping
-Hermes' real tool surface reachable — in both directions.
+Run **Hermes Agent** with the language model executing inside **opencode** or
+**kilocode** (the Kilo fork of opencode) over the Agent Client Protocol (ACP),
+while Hermes' real tool surface stays reachable from inside those agents over
+MCP.
 
-This repo documents the connector, ships the **Rust MCP transport** (a fast
-stdio front-end) plus the shared warm Python worker it talks to, keeps the
-original Python MCP server verbatim as reference/fallback, and carries
-sanitized configuration examples.
+Two layers, both directions:
+
+| Layer | Direction | What it does |
+|---|---|---|
+| **ACP** | Hermes → opencode/kilo | Hermes spawns opencode/kilo as the LLM backend; the model runs *inside* that process |
+| **MCP** | opencode/kilo → Hermes | The opencode/kilo agent calls back into Hermes' real tools (web search, vision, browser, skills, kanban, ...) through the `hermes-tools` stdio server |
+
+```
+                        ACP (LLM turn, tool schemas in prompt text)
+      Hermes  ───────────────────────────────────────────────▶  opencode / kilocode
+         ▲                                                          │
+         │   MCP "hermes-tools" (stdio, JSON-RPC 2.0)               │
+         └──────────────────────────────────────────────────────────┘
+                web_search · web_extract · vision_analyze · skills
+                text_to_speech · browser_* · image_generate · kanban_*
+```
+
+Why both? ACP has no native `tools`/`tool_calls` channel, and an ACP backend
+advertises *its own* toolset (bash, file edit, ...), not Hermes'. So Hermes
+renders its tool schemas into the prompt for the turn (ACP out), and exposes
+real Hermes tools to the spawned agent as an MCP server (MCP back in).
 
 ---
 
-## The problem
+## Documentation map
 
-Hermes runs agents across CLI, TUI, gateway, desktop... and, with this bridge,
-with the **model executing inside an opencode or kiloCode process** via the
-Agent Client Protocol (ACP).
+| Doc | Read it for |
+|---|---|
+| **[docs/SETUP.md](docs/SETUP.md)** | **Start here.** Full step-by-step from a clean machine: install Hermes, opencode, kilocode, the launcher, the Rust transport, and wire everything. |
+| [docs/ACP.md](docs/ACP.md) | The outbound layer in depth: how Hermes spawns opencode/kilo, model routing, the free-model fallback pool. |
+| [docs/MCP.md](docs/MCP.md) | The inbound layer in depth: launcher precedence, the Rust front-end, the warm Python worker, the exposed tools, the wire protocol. |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Symptom → cause → fix table, including MCP "failed" states and the known opencode auto-approve UI bug. |
+| [docs/VERIFY.md](docs/VERIFY.md) | Copy-paste checks that prove each layer works. |
+| [scripts/verify.sh](scripts/verify.sh) | Machine-runnable version of the checks above. |
 
-ACP has **no native `tools` / `tool_calls` channel**. When Hermes outsources the
-LLM turn to opencode/kilo over ACP, the opencode/kilo agent sees Hermes' tools
-only if their *schemas are embedded in the prompt text* and the responses are
-parsed back out. That works for the turn itself, but the opencode/kilo agent
-advertises its **own** toolset (bash, file edit, ...) — not Hermes' web search,
-vision, skills, browser automation, or kanban tools.
+Tested on Linux with:
 
-So the bridge has two cooperative layers:
+- Hermes Agent `v0.22.1+104` (2026.9.24), Python `3.12`, `mcp` `2.0.0`
+- `opencode-ai` `1.18.35` (npm)
+- `@kilocode/cli` `7.7.9` (npm)
 
-| Layer | Direction | What it does | How |
-|---|---|---|---|
-| **ACP (out)** | Hermes → opencode/kilo | Hermes spawns opencode/kilo as an ACP backend; the model runs inside it | `provider: opencode-acp`, `base_url: acp://opencode` (same for kilocode) |
-| **MCP (back)** | opencode/kilo → Hermes | The opencode/kilo agent calls Hermes' real, working tools | `hermes-tools` stdio MCP server registered in each client's MCP config |
+Model names and free tiers change frequently; treat every model id in the
+examples as a placeholder you re-check at setup time.
 
-The two layers compose: ACP carries the LLM turn **out**; MCP brings Hermes
-capability **back in**.
+---
+
+## 60-second quickstart
+
+For a machine that already has Hermes and opencode/kilo installed:
+
+```bash
+# 1. Hermes venv + MCP dependency
+HERMES_AGENT_DIR="${HERMES_AGENT_DIR:-$HOME/.hermes/hermes-agent}"
+"$HERMES_AGENT_DIR/venv/bin/pip" install "mcp>=2"
+
+# 2. Install the launcher (rust-preferred, python-fallback)
+install -m 0755 scripts/hermes-tools-mcp-launch \
+  "$HERMES_AGENT_DIR/venv/bin/hermes-tools-mcp-launch"
+
+# 3. Install the ACP provider plugins (REQUIRED for *-acp providers)
+cp -r providers/opencode-acp providers/kilocode-acp \
+  "$HOME/.hermes/plugins/model-providers/"
+
+# 4. Optional: build the fast Rust transport
+( cd rust && cargo build --release && \
+  install -m 0755 target/release/hermes-tools-mcp \
+    "$HERMES_AGENT_DIR/venv/bin/hermes-tools-mcp" ) || \
+  echo "no cargo — Python fallback will be used"
+
+# 5. Register the MCP server in both clients (merge, don't overwrite)
+#    see config/opencode.mcp.jsonc and config/kilo.mcp.jsonc
+
+# 6. Point Hermes at an ACP backend
+#    see config/config.yaml.acp-mcp
+
+# 7. Prove it
+./scripts/verify.sh
+```
+
+The full, ordered version with explanations is in **[docs/SETUP.md](docs/SETUP.md)**.
+
+---
+
+## Repository layout
 
 ```
-                    ACP (LLM turn, prompt text)
-    Hermes  ──────────────────────────────────────▶  opencode / kilocode
-       ▲                                                  │
-       │  MCP "hermes-tools" (stdio, JSON-RPC 2.0)        │
-       └──────────────────────────────────────────────────┘
-              web_search · web_extract · vision_analyze · skills
-              text_to_speech · browser_* · image_generate · kanban_*
+providers/opencode-acp/       ACP model-provider plugin (REQUIRED for provider: opencode-acp)
+providers/kilocode-acp/       ACP model-provider plugin (REQUIRED for provider: kilocode-acp)
+rust/                         Rust MCP transport (stdio JSON-RPC front-end)
+  src/main.rs                 initialize/ping/tools/list/tools/call, worker supervisor
+  Cargo.toml, Cargo.lock
+worker/hermes_tools_worker.py Shared warm Python worker (imports model_tools once)
+connector/hermes_tools_mcp_server.py
+                              Original Python MCP server (reference + fallback)
+scripts/hermes-tools-mcp-launch
+                              Chooses Rust vs Python; this is the MCP `command`
+scripts/install-bridge.sh     Installs mcp + launcher + provider plugins (+ optional Rust)
+scripts/verify.sh             End-to-end environment checks
+config/opencode.mcp.jsonc     opencode MCP registration snippet
+config/kilo.mcp.jsonc         kilocode MCP registration snippet
+config/config.yaml.acp-mcp    Hermes ACP model-routing snippet
+config/config.yaml.model-fallback.yaml
+                              Free-model fallback pool example
+docs/                         Setup, ACP, MCP, verification, troubleshooting
 ```
 
-## The pieces
+---
 
-### 1. Hermes side — ACP out (config.yaml)
+## How the two halves fit together
+
+### Out: ACP (Hermes → opencode/kilo)
+
+`config.yaml` selects an ACP provider:
 
 ```yaml
 model:
@@ -55,80 +126,29 @@ model:
   base_url: acp://opencode
 ```
 
-Hermes' OpenAI-shaped bridge (`agent/acp_openai_bridge.py`) renders its tool
-schemas into the prompt (`render_tool_bridge_sections`) and extracts tool calls
-back out of the response text with a `<tool_call>{...}</tool_call>` parse
-(`extract_tool_calls_from_text`). A client with its own tools receives only the
-Hermes tools that overlap-free region needs; a bare CLI receives everything.
+or `provider: kilocode-acp`, `base_url: acp://kilocode`.
 
-A fallback pool (`fallback_providers`) rotates free models across both
-backends — see `config/config.yaml.acp-mcp`.
+> **Required on a fresh machine:** those provider names come from the user
+> plugins in `providers/` (`opencode-acp`, `kilocode-acp`) — they are not built
+> into Hermes. Install them into `~/.hermes/plugins/model-providers/` first, or
+> Hermes reports an unknown provider. See [docs/SETUP.md](docs/SETUP.md#5b-install-the-acp-provider-plugins).
 
-### 2. Hermes side — the MCP transport (`rust/hermes-tools-mcp` + `worker/hermes_tools_worker.py`)
+Hermes'
+`agent/acp_openai_bridge.py` renders tool schemas into the prompt and parses
+`<tool_call>{...}</tool_call>` back out of the reply. A `fallback_providers`
+pool rotates free models across both backends. Details: **[docs/ACP.md](docs/ACP.md)**.
 
-A **Rust stdio MCP server** (newline-delimited JSON-RPC 2.0) that exposes
-Hermes' tools to **any** MCP client, backed by a long-lived warm Python worker:
+### Back in: MCP (opencode/kilo → Hermes)
 
-```
-                  tools/list · tools/call
-  opencode / kilo ─────────────────────────▶ rust/hermes-tools-mcp  (stdio)
-                                              │  JSON-RPC over Unix socket
-                                              ▼
-                                    worker/hermes_tools_worker.py
-                                      (imports model_tools once)
-```
-
-The Rust binary is the client-facing process that opencode/kilocode spawns; it
-shares **one** warm Python worker (`agent.transports.hermes_tools_worker`)
-across all sessions so the ~1.5 s `model_tools` import and ~115 MB resident
-worker happen once, not per client process. Behavior is identical to the
-Python server:
-
-- builds the authoritative tool schemas from
-  `model_tools.get_tool_definitions(quiet_mode=True)`,
-- registers the curated `EXPOSED_TOOLS` set,
-- dispatches each call through `model_tools.handle_function_call(...)`,
-- runs the worker with `HERMES_QUIET=1` / `HERMES_REDACT_SECRETS=true`; the
-  worker logs to `<socket>.log` (never stdout) so the stdio wire stays clean.
-
-Build:
-
-```bash
-cd rust/hermes-tools-mcp          # or this repo's rust/
-cargo build --release
-cp target/release/hermes-tools-mcp "$HERMES_AGENT_DIR/venv/bin/"
-```
-
-The worker is invoked by the binary via `python -m agent.transports.hermes_tools_worker`
-from a hermes-agent checkout (socket `--socket`, idle exit `--idle-seconds`
-default 300, socket `chmod 0600`).
-
-### 3. Hermes side — the original Python MCP server (`connector/hermes_tools_mcp_server.py`)
-
-Kept verbatim as the reference implementation and fallback. Standalone use:
-
-```bash
-python -m agent.transports.hermes_tools_mcp_server
-```
-
-### 4. Client side — MCP registration
-
-Register the server as a local stdio MCP server in each client's global config:
-
-- **opencode** → `~/.config/opencode/opencode.jsonc`
-- **kilocode** → `~/.config/kilo/kilo.jsonc`
-
-Minimal entry (paths → `$HERMES_AGENT_DIR` placeholder; see
-`config/opencode.mcp.jsonc` / `config/kilo.mcp.jsonc`):
+Both clients register one local stdio server named `hermes-tools` whose command
+is the launcher:
 
 ```jsonc
 {
   "mcp": {
     "hermes-tools": {
       "type": "local",
-      "command": [
-        "$HERMES_AGENT_DIR/venv/bin/hermes-tools-mcp-launch"
-      ],
+      "command": ["$HERMES_AGENT_DIR/venv/bin/hermes-tools-mcp-launch"],
       "cwd": "$HERMES_AGENT_DIR",
       "enabled": true
     }
@@ -136,86 +156,38 @@ Minimal entry (paths → `$HERMES_AGENT_DIR` placeholder; see
 }
 ```
 
-`command` points at the **launcher** (`scripts/hermes-tools-mcp-launch`), which
-prefers the Rust transport and degrades to the Python server, because the MCP
-config schemas accept only a single `command` array:
+The launcher `exec`s the Rust `hermes-tools-mcp` when it exists and `--check`
+passes, otherwise `exec`s `python -m agent.transports.hermes_tools_mcp_server`.
+Either way the client sees the same tools. Details: **[docs/MCP.md](docs/MCP.md)**.
 
-- if `hermes-tools-mcp` (Rust) exists and `--check` passes (worker python +
-  worker module reachable) → `exec` the Rust binary;
-- otherwise → `exec python -m agent.transports.hermes_tools_mcp_server`.
-
-A direct Rust wiring (without python fallback) replaces the command with
-`["$HERMES_AGENT_DIR/venv/bin/hermes-tools-mcp", "--socket",
-"$HERMES_RUN_DIR/hermes-tools.sock", "--worker-python",
-"$HERMES_AGENT_DIR/venv/bin/python", "--cwd", "$HERMES_AGENT_DIR",
-"--idle-seconds", "600"]`.
-
-Verify with `opencode mcp list` / `kilo mcp list` → `hermes-tools ✓ connected`.
+---
 
 ## Exposed tools
 
-The curated `EXPOSED_TOOLS` surface (see the module constant):
+`web_search`, `web_extract`, browser automation (`browser_navigate`,
+`browser_click`, `browser_type`, `browser_press`, `browser_snapshot`,
+`browser_scroll`, `browser_back`, `browser_get_images`, `browser_console`,
+`browser_vision`), `vision_analyze`, `image_generate`, `skill_view`,
+`skills_list`, `text_to_speech`, and the kanban handoff/orchestrator tools.
 
-- `web_search`, `web_extract`
-- browser automation: `browser_navigate`, `browser_click`, `browser_type`,
-  `browser_press`, `browser_snapshot`, `browser_scroll`, `browser_back`,
-  `browser_get_images`, `browser_console`, `browser_vision`
-- `vision_analyze`, `image_generate`, `skill_view`, `skills_list`,
-  `text_to_speech`
-- kanban handoff: `kanban_complete/block/request_review/request_changes/comment/
-  heartbeat/show/list`
-- orchestrator (gated on `HERMES_KANBAN_TASK` unset): `kanban_create`,
-  `kanban_unblock`, `kanban_link`
+A tool whose backend is not configured in the Hermes process is **skipped**, not
+advertised dead — the server only registers what Hermes actually has.
 
-Some tools only register when their environment is present (browser backend +
-Chromium, image FAL key or image provider, kanban toolset) — the server skips a
-tool that is not registered in the Hermes process rather than advertising a
-dead one.
+---
 
-## Wiring it up end-to-end
+## Security
 
-1. Have a `hermes-agent` checkout with its venv and the `mcp` package
-   (`pip install "mcp>=2"`).
-2. Set Hermes' model to an ACP backend (see `config.yaml.acp-mcp` and
-   `config/config.yaml.model-fallback.yaml`). Default routing is **kilocode free
-   → opencode free → nvidia** (all t2 free tiers across both clients first,
-   nvidia last; see the sanctioned example).
-3. Register `hermes-tools` in opencode and/or kilocode configs.
-4. Confirm registration: `opencode mcp list`, `kilo mcp list`.
-5. Run a turn. The opencode/kilo agent now has `hermes-tools_*` tools backed by
-   Hermes' real implementations.
-
-### Verified smoke tests (free models)
-
-- `opencode run -m opencode/big-pickle "<prompt>"` → invokes
-  `hermes-tools_web_search`, returns real results.
-- `kilo run -m kilo/kilo-auto/free "<prompt>"` → same for kilocode.
-- `hermes -m opencode/mimo-v2.6-flash-free --provider opencode-acp -z "<prompt>"` →
-  the Hermes agent drives opencode over ACP and the opencode agent calls back
-  into Hermes via MCP.
-- `hermes -m kilo/kilo-auto/free --provider kilocode-acp -z "<prompt>"` → same
-  for kilocode.
-
-All four paths resolve through the `hermes-tools-mcp-launch` wrapper, which
-prefers the Rust `hermes-tools-mcp` binary (one shared warm worker) and falls
-back to the Python MCP server if the Rust binary is broken/missing.
-
-## Notes and roadmap
-
-- The MCP wire is newline-delimited JSON-RPC 2.0 on stdio (UTF-8), matching the
-  `mcp` 2.x server (`mcp.server.MCPServer`).
-- The Rust front-end (`rust/`) spawns the worker if the socket is unreachable,
-  retries on a dropped connection, and handles `initialize`, `ping`,
-  `tools/list`, `tools/call`, and `method-not-found` (-32601) exactly like the
-  Python server.
-- `connector/hermes_tools_mcp_server.py` and
-  `worker/hermes_tools_worker.py` originate from
-  [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)
-  (Apache-2.0); the server is mirrored verbatim for standalone reference, the
-  worker ships as the shared backend for the Rust front-end.
-- **Roadmap:** publish the compiled Rust binary as a released asset; port the
-  worker itself to Rust for fully dependency-free operation.
+- **Never commit credentials.** `.env`, `*pat*`, `*.bak*` are git-ignored. Model
+  keys live in Hermes' `~/.hermes/.env` and are referenced by name (`key_env:`),
+  never inlined.
+- The worker runs with `HERMES_QUIET=1` and `HERMES_REDACT_SECRETS=true`, logs to
+  `<socket>.log` (never stdout), and chmods the socket `0600`.
+- `hermes-tools` is a **local stdio** server; it does not open a network port.
+- Treat any pasted token as compromised: revoke and re-issue rather than reusing.
 
 ## License
 
-Apache-2.0 (matching the source project). See `LICENSE`.
+Apache-2.0 (matching the upstream Hermes Agent project). See [LICENSE](LICENSE).
+
+`connector/hermes_tools_mcp_server.py` and `worker/hermes_tools_worker.py`
+originate from [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent).

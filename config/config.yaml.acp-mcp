@@ -1,5 +1,9 @@
 # --- Hermes config.yaml excerpt: ACP layer (Hermes -> opencode / kilocode) ---
 #
+# REQUIRED: provider: opencode-acp / kilocode-acp come from the user plugins in
+# providers/ (install into ~/.hermes/plugins/model-providers/). Without them
+# Hermes reports an unknown provider. See docs/ACP.md and docs/SETUP.md 5b.
+#
 # The model runs INSIDE an opencode / kiloCode process spawned by Hermes as an
 # ACP backend. Hermes' tool schemas travel into the prompt as text
 # (agent/acp_openai_bridge.py) and tool calls are parsed back out of the reply.
