@@ -1,8 +1,12 @@
 # Full setup from a clean machine
 
-> Shortcut: after the prerequisites, `./scripts/install-bridge.sh --with-rust`
-> performs steps 4–6b (mcp, launcher, provider plugins, optional Rust build) and
-> prints the config blocks still to merge. The manual steps below explain each.
+> **Shortcut:** after the prerequisites and the two client installs (§3), run
+> `./scripts/install-bridge.sh --with-rust`. It performs §4, §5, §5b, §6, §7, §8
+> and §10 automatically (mcp, launcher, provider plugins, optional Rust, both
+> client configs, Hermes routing), backing up every file it edits. The only
+> manual step left is `opencode auth login` / `kilo auth login` (§9). The manual
+> walkthrough below explains what each step does and is the reference if you
+> prefer to wire things by hand or want to understand the script.
 
 This is the complete, ordered build-up for a machine that has **neither** Hermes
 nor opencode/kilocode yet. If you already have some of the pieces, skip to the
@@ -388,6 +392,17 @@ outside this repo's scope.
 - **Uninstall the bridge:** delete the `hermes-tools` block from both client
   configs, then `rm "$HERMES_AGENT_DIR/venv/bin/hermes-tools-mcp"{,-launch}` and
   the Rust build dir. No files outside those locations are touched.
+- **What `install-bridge.sh` edits, and how to undo it:**
+  - `~/.config/opencode/opencode.jsonc`, `~/.config/kilo/kilo.jsonc` — merges
+    `mcp.hermes-tools`; the previous file is kept as
+    `<name>.bak.<UTC timestamp>` beside it. JSONC **comments are not preserved**
+    on rewrite (keys and values are). Restore the `.bak` to undo.
+  - `~/.hermes/config.yaml` — changed only via `hermes config set`
+    (`model.provider`, `model.base_url`, `model.default`), which preserves the
+    rest of the file including comments and YAML anchors; it also clears a stale
+    `model.api_mode` that belonged to the previous provider. Use
+    `hermes config set` to change it back, or `--provider none` to skip it.
+  - It never edits `.env`; keys stay where they were.
 
 ---
 

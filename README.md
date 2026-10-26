@@ -51,38 +51,33 @@ examples as a placeholder you re-check at setup time.
 
 ---
 
-## 60-second quickstart
+## One-command setup
 
-For a machine that already has Hermes and opencode/kilo installed:
+After Hermes and opencode/kilocode are installed on the machine:
 
 ```bash
-# 1. Hermes venv + MCP dependency
-HERMES_AGENT_DIR="${HERMES_AGENT_DIR:-$HOME/.hermes/hermes-agent}"
-"$HERMES_AGENT_DIR/venv/bin/pip" install "mcp>=2"
-
-# 2. Install the launcher (rust-preferred, python-fallback)
-install -m 0755 scripts/hermes-tools-mcp-launch \
-  "$HERMES_AGENT_DIR/venv/bin/hermes-tools-mcp-launch"
-
-# 3. Install the ACP provider plugins (REQUIRED for *-acp providers)
-cp -r providers/opencode-acp providers/kilocode-acp \
-  "$HOME/.hermes/plugins/model-providers/"
-
-# 4. Optional: build the fast Rust transport
-( cd rust && cargo build --release && \
-  install -m 0755 target/release/hermes-tools-mcp \
-    "$HERMES_AGENT_DIR/venv/bin/hermes-tools-mcp" ) || \
-  echo "no cargo — Python fallback will be used"
-
-# 5. Register the MCP server in both clients (merge, don't overwrite)
-#    see config/opencode.mcp.jsonc and config/kilo.mcp.jsonc
-
-# 6. Point Hermes at an ACP backend
-#    see config/config.yaml.acp-mcp
-
-# 7. Prove it
+./scripts/install-bridge.sh --with-rust
 ./scripts/verify.sh
 ```
+
+`install-bridge.sh` is idempotent and does the whole wiring:
+
+1. installs `mcp>=2` into the Hermes venv,
+2. installs the launcher (`venv/bin/hermes-tools-mcp-launch`),
+3. installs the required ACP provider plugins (`opencode-acp`, `kilocode-acp`),
+4. optionally builds + installs the Rust transport (`--with-rust`),
+5. merges `mcp.hermes-tools` into `~/.config/opencode/opencode.jsonc` and
+   `~/.config/kilo/kilo.jsonc` (backs each file up first),
+6. points Hermes' `model.provider` / `base_url` / `default` at an ACP backend,
+7. smoke-tests the launcher.
+
+Flags: `--provider opencode|kilocode|none` (default `opencode`), `--model <id>`,
+`--no-config`, `--dry-run`, `--no-backup`. `--provider none` gives an MCP-only
+setup and leaves `config.yaml` untouched.
+
+The only step that stays manual is the one-time `opencode auth login` /
+`kilo auth login` (interactive, needs a browser) — see
+[docs/SETUP.md §9](docs/SETUP.md#9-authenticate-the-clients).
 
 The full, ordered version with explanations is in **[docs/SETUP.md](docs/SETUP.md)**.
 
@@ -101,7 +96,8 @@ connector/hermes_tools_mcp_server.py
                               Original Python MCP server (reference + fallback)
 scripts/hermes-tools-mcp-launch
                               Chooses Rust vs Python; this is the MCP `command`
-scripts/install-bridge.sh     Installs mcp + launcher + provider plugins (+ optional Rust)
+scripts/install-bridge.sh     One-command install + config wiring (idempotent)
+scripts/merge_mcp_config.py   JSONC-safe merge of mcp.hermes-tools into a client config
 scripts/verify.sh             End-to-end environment checks
 config/opencode.mcp.jsonc     opencode MCP registration snippet
 config/kilo.mcp.jsonc         kilocode MCP registration snippet

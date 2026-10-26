@@ -72,6 +72,14 @@ opencode/kilo do **not** expand env vars in the `command` array.
 The Rust transport keeps one warm worker (launcher `--idle-seconds` 600). Not a
 bug.
 
+### The installer rewrote my client config and dropped my comments
+**Cause:** opencode/kilo configs are JSONC, but JSONC comments are not part of
+the data model, so the merge helper rewrites the file as plain JSON.
+**Fix:** keys and values are preserved; if you want your comments back, restore
+the backup the installer left beside the file
+(`opencode.jsonc.bak.<timestamp>` / `kilo.jsonc.bak.<timestamp>`), then re-add
+the `mcp.hermes-tools` block by hand.
+
 ### Stale socket / worker wedged
 ```bash
 ls -l "$HOME/.hermes/run/hermes-tools.sock"*
